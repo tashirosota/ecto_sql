@@ -980,6 +980,8 @@ defmodule Ecto.Adapters.SQL do
       log_time("idle", measurements, :idle_time, true),
       ?\n,
       query,
+      ?\n,
+      "  ↳ " <> log_current_stacktrace(),
       ?\s,
       inspect(params, charlists: false)
     ]
@@ -1006,6 +1008,17 @@ defmodule Ecto.Adapters.SQL do
       %{} ->
         []
     end
+  end
+
+  defp log_current_stacktrace do
+    get_stacktrace_element = &elem(&1, 3)
+    get_match_pach_stacktrace =
+      &(Enum.at(&1, 0) |> elem(1) |> to_string() |> String.match?(~r/lib\//))
+
+    Process.info(self(), :current_stacktrace)
+    |> elem(1)
+    |> Enum.map(get_stacktrace_element)
+    |> Enum.find(get_match_pach_stacktrace)
   end
 
   ## Connection helpers
