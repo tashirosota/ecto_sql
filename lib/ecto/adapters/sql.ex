@@ -60,6 +60,30 @@ defmodule Ecto.Adapters.SQL do
     * `:driver` (required) - the database driver library.
       For example: `:postgrex`
 
+  ## Debug log
+
+  You can get caller location when SQL called and log level is :debug.
+
+  ```
+  HH:mm:ss [debug] [] SELECT * FROM "table_name" AS s0
+    db=Nms source="table_name" OK QUERY
+    ↳ [file: 'lib/YOUR_APP_NAME/process.ex', line: 100] # Can get matched stacktrace
+  ```
+
+  Default match path is `your_opt_app`.
+  If you want to get if from custom match path, set `log_stacktrace_match_path` to config.
+
+  ```
+  import Config
+  config :your_app, YourApp.Repo,
+    username: "username",
+    password: "password",
+    database: "your_app_dev",
+    hostname: "hostname",
+    pool_size: 10,
+    log_stacktrace_match_path: "lib/custom_path" # Can get matched stacktrace from "lib/custom_path"
+  ```
+
   """
 
   require Logger
@@ -581,7 +605,7 @@ defmodule Ecto.Adapters.SQL do
   end
 
   @pool_opts [:timeout, :pool, :pool_size] ++
-               [:queue_target, :queue_interval, :ownership_timeout, :repo]
+               [:queue_target, :queue_interval, :ownership_timeout, :repo, :otp_app, :log_stacktrace_match_path]
 
   @doc false
   def init(connection, driver, config) do
@@ -893,7 +917,7 @@ defmodule Ecto.Adapters.SQL do
       result: result,
       query: query
     } = entry
-
+    log_stacktrace_match_path = Keyword.get(opts, :log_stacktrace_match_path) || Keyword.get(opts, :otp_app) |> to_string()
     source = Keyword.get(opts, :source)
     query_string = String.Chars.to_string(query)
 
@@ -920,6 +944,7 @@ defmodule Ecto.Adapters.SQL do
       params: params,
       query: query_string,
       source: source,
+      log_stacktrace_match_path: log_stacktrace_match_path,
       options: Keyword.get(opts, :telemetry_options, [])
     }
 
@@ -966,10 +991,11 @@ defmodule Ecto.Adapters.SQL do
       params: params,
       query: query,
       result: result,
-      source: source
+      source: source,
+      log_stacktrace_match_path: log_stacktrace_match_path
     } = metadata
 
-    [
+    iodata = [
       "QUERY",
       ?\s,
       log_ok_error(result),
@@ -983,6 +1009,11 @@ defmodule Ecto.Adapters.SQL do
       ?\s,
       inspect(params, charlists: false)
     ]
+    if current_stacktrace = log_current_stacktrace(log_stacktrace_match_path) do
+      ["  ↳ #{current_stacktrace |> inspect}" | [?\n |iodata]] |> Enum.reverse()
+    else
+      iodata
+    end
   end
 
   defp log_ok_error({:ok, _res}), do: "OK"
@@ -1006,6 +1037,36 @@ defmodule Ecto.Adapters.SQL do
       %{} ->
         []
     end
+  end
+
+  defp log_current_stacktrace(stacktrace_match_path) do
+    case Regex.compile(stacktrace_match_path) do
+      {:ok, regex_stacktrace_match_path} ->
+        log_current_stacktrace(
+          regex_stacktrace_match_path,
+          Process.info(self(), :current_stacktrace) |> elem(1)
+        )
+      {:error, _} -> nil
+    end
+  end
+
+  defp log_current_stacktrace(regex_stacktrace_match_path, [stacktrace | stacktraces]) do
+    log_current_stacktrace(regex_stacktrace_match_path, stacktraces, [elem(stacktrace, 3)])
+  end
+
+  defp log_current_stacktrace(regex_stacktrace_match_path, [stacktrace | stacktraces], stacktraces_for_log) do
+    log_current_stacktrace(regex_stacktrace_match_path, stacktraces, stacktraces_for_log ++ [elem(stacktrace, 3)])
+  end
+
+  defp log_current_stacktrace(regex_stacktrace_match_path, [], stacktraces_for_log) do
+    stacktraces_for_log
+    |> Enum.find(
+      &(
+        Enum.at(&1, 0)
+        |> elem(1)
+        |> to_string()
+        |> String.match?(regex_stacktrace_match_path))
+      )
   end
 
   ## Connection helpers
